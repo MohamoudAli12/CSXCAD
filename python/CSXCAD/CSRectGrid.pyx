@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # cython: language_level=3
 #
-# Copyright (C) 2015,20016 Thorsten Liebig (Thorsten.Liebig@gmx.de)
+# Copyright (C) 2015,2016 Thorsten Liebig (Thorsten.Liebig@gmx.de)
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published
@@ -140,21 +140,21 @@ cdef class CSRectGrid:
         ny = CheckNyDir(ny)
         return self.thisptr.GetLine(ny, idx)
 
-    def GetLines(self, ny, do_sort=False):
-        """ GetLines(ny, do_sort=False)
+    def GetLines(self, ny, do_sort=True):
+        """ GetLines(ny, do_sort=True)
 
         Get all lines in a given direction `ny`.
 
         :param ny: int or str -- direction definition
-        :param do_sort: bool  -- sort lines
+        :param do_sort: bool  -- sort lines (default True)
         """
         ny = CheckNyDir(ny)
-        cdef unsigned int N = 0
-        cdef double* array = NULL
-        array = self.thisptr.GetLines(ny, array, N, do_sort)
+        if do_sort:
+            self.thisptr.Sort(ny)
+        cdef size_t N = self.thisptr.GetQtyLines(ny)
         lines = np.zeros(N)
         for n in range(N):
-            lines[n] = array[n]
+            lines[n] = self.thisptr.GetLine(ny, n)
         return lines
 
     def ClearLines(self, ny):

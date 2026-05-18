@@ -28,7 +28,7 @@
 CSPrimMultiBox::CSPrimMultiBox(unsigned int ID, ParameterSet* paraSet, CSProperties* prop) : CSPrimitives(ID,paraSet,prop)
 {
 	Type=MULTIBOX;
-	PrimTypeName = std::string("Multi Box");
+	PrimTypeName = std::string("MultiBox");
 }
 
 CSPrimMultiBox::CSPrimMultiBox(CSPrimMultiBox* multiBox, CSProperties *prop) : CSPrimitives(multiBox, prop)
@@ -36,17 +36,19 @@ CSPrimMultiBox::CSPrimMultiBox(CSPrimMultiBox* multiBox, CSProperties *prop) : C
 	Type=MULTIBOX;
 	for (size_t i=0;i<multiBox->vCoords.size();++i)
 		vCoords.push_back(new ParameterScalar(multiBox->vCoords.at(i)));
-	PrimTypeName = std::string("Multi Box");
+	PrimTypeName = std::string("MultiBox");
 }
 
 CSPrimMultiBox::CSPrimMultiBox(ParameterSet* paraSet, CSProperties* prop) : CSPrimitives(paraSet,prop)
 {
 	Type=MULTIBOX;
-	PrimTypeName = std::string("Multi Box");
+	PrimTypeName = std::string("MultiBox");
 }
 
 CSPrimMultiBox::~CSPrimMultiBox()
 {
+	for (size_t i=0; i<vCoords.size(); ++i)
+		delete vCoords.at(i);
 }
 
 CSPrimitives* CSPrimMultiBox::GetCopy(CSProperties *prop) {return new CSPrimMultiBox(this,prop);}
@@ -97,6 +99,8 @@ void CSPrimMultiBox::DeleteBox(size_t box)
 	std::vector<ParameterScalar*>::iterator start=vCoords.begin()+(box*6);
 	std::vector<ParameterScalar*>::iterator end=vCoords.begin()+(box*6+6);
 
+	for (std::vector<ParameterScalar*>::iterator it=start; it!=end; ++it)
+		delete *it;
 	vCoords.erase(start,end);
 }
 
@@ -129,7 +133,10 @@ void CSPrimMultiBox::ClearOverlap()
 {
 	if (vCoords.size()%6==0) return;  //no work to be done
 
-	vCoords.resize(vCoords.size()-vCoords.size()%6);
+	size_t new_size = vCoords.size() - vCoords.size()%6;
+	for (size_t i=new_size; i<vCoords.size(); ++i)
+		delete vCoords.at(i);
+	vCoords.resize(new_size);
 }
 
 bool CSPrimMultiBox::GetBoundBox(double dBoundBox[6], bool PreserveOrientation)

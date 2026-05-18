@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # cython: language_level=3
 #
-# Copyright (C) 2015,20016 Thorsten Liebig (Thorsten.Liebig@gmx.de)
+# Copyright (C) 2015,2016 Thorsten Liebig (Thorsten.Liebig@gmx.de)
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published
@@ -63,6 +63,13 @@ cdef class CSTransform:
             raise Exception('Different C++ class pointer already assigned to python wrapper class!')
         self.thisptr = ptr
         CSTransform._instances[<uintptr_t>self.thisptr] = self
+
+    def copy(self):
+        """Return an independent copy of this transform."""
+        cdef CSTransform obj = CSTransform.__new__(CSTransform)
+        obj.thisptr = new _CSTransform(self.thisptr)
+        obj._SetPtr(obj.thisptr)
+        return obj
 
     def Reset(self):
         """

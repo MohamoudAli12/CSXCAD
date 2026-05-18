@@ -26,6 +26,90 @@
 #include "ParameterCoord.h"
 #include "CSPropDiscMaterial.h"
 
+namespace {
+void* ReadDataSet(std::string filename, std::string d_name, hid_t type_id, int &rank, unsigned int &size, bool debug=false)
+{
+	herr_t status;
+	H5T_class_t class_id;
+	size_t type_size;
+	rank = -1;
+
+	hid_t file_id = H5Fopen( filename.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT );
+	if (file_id < 0)
+	{
+		if (debug)
+			std::cerr << __func__ << ": Failed to open file, skipping..." << std::endl;
+		H5Fclose(file_id);
+		return NULL;
+	}
+
+	if (H5Lexists(file_id, d_name.c_str(), H5P_DEFAULT)<=0)
+	{
+		if (debug)
+			std::cerr << __func__ << ": Warning, dataset: \"" << d_name << "\" not found... skipping" << std::endl;
+		H5Fclose(file_id);
+		return NULL;
+	}
+
+	status = H5LTget_dataset_ndims(file_id, d_name.c_str(), &rank);
+	if (status < 0)
+	{
+		if (debug)
+			std::cerr << __func__ << ": Warning, failed to read dimension for dataset: \"" << d_name << "\" skipping..." << std::endl;
+		H5Fclose(file_id);
+		return NULL;
+	}
+
+	hsize_t* dims = new hsize_t[rank];
+	status = H5LTget_dataset_info( file_id, d_name.c_str(), dims, &class_id, &type_size);
+	if (status < 0)
+	{
+		if (debug)
+			std::cerr << __func__ << ": Warning, failed to read dataset info: \"" << d_name << "\" skipping..." << std::endl;
+		delete[] dims;
+		H5Fclose(file_id);
+		return NULL;
+	}
+
+	size = 1;
+	for (int n=0;n<rank;++n)
+		size*=dims[n];
+	delete[] dims; dims = NULL;
+
+	void* data;
+	if (type_id==H5T_NATIVE_FLOAT)
+		data = (void*) new float[size];
+	else if (type_id==H5T_NATIVE_INT)
+		data = (void*) new int[size];
+	else if (type_id==H5T_NATIVE_UINT8)
+		data = (void*) new uint8[size];
+	else
+	{
+		std::cerr << __func__ << ": Error, unknown data type" << std::endl;
+		H5Fclose(file_id);
+		return NULL;
+	}
+
+	status = H5LTread_dataset( file_id, d_name.c_str(), type_id, data );
+	if (status < 0)
+	{
+		if (debug)
+			std::cerr << __func__ << ": Warning, failed to read dataset: \"" << d_name << "\" skipping..." << std::endl;
+		if (type_id==H5T_NATIVE_FLOAT)
+			delete[] (float*)data;
+		else if (type_id==H5T_NATIVE_INT)
+			delete[] (int*)data;
+		else if (type_id==H5T_NATIVE_UINT8)
+			delete[] (uint8*)data;
+		H5Fclose(file_id);
+		return NULL;
+	}
+
+	H5Fclose(file_id);
+	return data;
+}
+} // namespace
+
 CSPropDiscMaterial::CSPropDiscMaterial(ParameterSet* paraSet) : CSPropMaterial(paraSet)
 {
 	Type=(CSProperties::PropertyType)(DISCRETE_MATERIAL | MATERIAL);
@@ -40,6 +124,8 @@ CSPropDiscMaterial::CSPropDiscMaterial(CSPropDiscMaterial* prop, bool copyPrim) 
 	m_FileType = prop->m_FileType;
 	m_DB_Background = prop->m_DB_Background;
 	m_Scale = prop->m_Scale;
+	if (prop->m_Transform)
+		m_Transform = CSTransform::New(prop->m_Transform);
 	//Copy does not read the data!!
 }
 
@@ -125,6 +211,7 @@ int CSPropDiscMaterial::GetDBPos(const double* coords)
 
 double CSPropDiscMaterial::GetEpsilonWeighted(int ny, const double* inCoords)
 {
+	EnsureFileLoaded();
 	if (m_Disc_epsR==NULL)
 		return CSPropMaterial::GetEpsilonWeighted(ny,inCoords);
 	int pos = GetDBPos(inCoords);
@@ -135,6 +222,7 @@ double CSPropDiscMaterial::GetEpsilonWeighted(int ny, const double* inCoords)
 
 double CSPropDiscMaterial::GetKappaWeighted(int ny, const double* inCoords)
 {
+	EnsureFileLoaded();
 	if (m_Disc_kappa==NULL)
 		return CSPropMaterial::GetKappaWeighted(ny,inCoords);
 	int pos = GetDBPos(inCoords);
@@ -145,6 +233,7 @@ double CSPropDiscMaterial::GetKappaWeighted(int ny, const double* inCoords)
 
 double CSPropDiscMaterial::GetMueWeighted(int ny, const double* inCoords)
 {
+	EnsureFileLoaded();
 	if (m_Disc_mueR==NULL)
 		return CSPropMaterial::GetMueWeighted(ny,inCoords);
 	int pos = GetDBPos(inCoords);
@@ -155,6 +244,7 @@ double CSPropDiscMaterial::GetMueWeighted(int ny, const double* inCoords)
 
 double CSPropDiscMaterial::GetSigmaWeighted(int ny, const double* inCoords)
 {
+	EnsureFileLoaded();
 	if (m_Disc_sigma==NULL)
 		return CSPropMaterial::GetSigmaWeighted(ny,inCoords);
 	int pos = GetDBPos(inCoords);
@@ -165,6 +255,7 @@ double CSPropDiscMaterial::GetSigmaWeighted(int ny, const double* inCoords)
 
 double CSPropDiscMaterial::GetDensityWeighted(const double* inCoords)
 {
+	EnsureFileLoaded();
 	if (m_Disc_Density==NULL)
 		return CSPropMaterial::GetDensityWeighted(inCoords);
 	int pos = GetDBPos(inCoords);
@@ -191,9 +282,18 @@ void CSPropDiscMaterial::Init()
 	m_Disc_Density=NULL;
 
 	m_Scale=1;
+	m_FileRead=false;
 	m_Transform=NULL;
 
 	CSPropMaterial::Init();
+}
+
+void CSPropDiscMaterial::SetTransform(CSTransform* transform)
+{
+	if (transform == m_Transform)
+		return;
+	delete m_Transform;
+	m_Transform = transform;
 }
 
 bool CSPropDiscMaterial::Write2XML(TiXmlNode& root, bool parameterised, bool sparse)
@@ -205,8 +305,8 @@ bool CSPropDiscMaterial::Write2XML(TiXmlNode& root, bool parameterised, bool spa
 	TiXmlElement filename("DiscFile");
 	filename.SetAttribute("Type",m_FileType);
 	filename.SetAttribute("File",m_Filename.c_str());
-	filename.SetAttribute("UseDBBackground",m_DB_Background);
-	filename.SetAttribute("Scale",m_Scale);
+	filename.SetAttribute("UseDBBackground",(int)m_DB_Background);
+	filename.SetDoubleAttribute("Scale",m_Scale);
 
 	if (m_Transform)
 		m_Transform->Write2XML(prop);
@@ -223,116 +323,45 @@ bool CSPropDiscMaterial::ReadFromXML(TiXmlNode &root)
 
 	if (prop==NULL) return false;
 
-	m_FileType = 0;
-	prop->QueryIntAttribute("Type",&m_FileType);
-	if (prop->QueryStringAttribute("File",&m_Filename)!=TIXML_SUCCESS)
-		m_Filename.clear();
-
-	int help;
-	if (prop->QueryIntAttribute("UseDBBackground",&help)==TIXML_SUCCESS)
-		SetUseDataBaseForBackground(help!=0);
-
 	delete m_Transform;
 	m_Transform = CSTransform::New(prop, clParaSet);
 
-	if (prop->QueryDoubleAttribute("Scale",&m_Scale)!=TIXML_SUCCESS)
-		m_Scale=1;
+	TiXmlElement* dfElem = prop->FirstChildElement("DiscFile");
+	if (dfElem)
+	{
+		m_FileType = 0;
+		dfElem->QueryIntAttribute("Type",&m_FileType);
+		if (dfElem->QueryStringAttribute("File",&m_Filename)!=TIXML_SUCCESS)
+			m_Filename.clear();
 
-	return this->ReadFile();
+		int help;
+		if (dfElem->QueryIntAttribute("UseDBBackground",&help)==TIXML_SUCCESS)
+			SetUseDataBaseForBackground(help!=0);
+
+		if (dfElem->QueryDoubleAttribute("Scale",&m_Scale)!=TIXML_SUCCESS)
+			m_Scale=1;
+	}
+
+	return true;
+}
+
+void CSPropDiscMaterial::EnsureFileLoaded()
+{
+	if (!m_FileRead)
+		ReadFile();
 }
 
 bool CSPropDiscMaterial::ReadFile()
 {
+	m_FileRead = true;
 	if (m_Filename.empty())
 		return false;
 
 	if (m_FileType==0)
 		return ReadHDF5(m_Filename);
 	else
-		std::cerr << "CSPropDiscMaterial::ReadFromXML: Unknown file type or no filename given." << std::endl;
+		std::cerr << "CSPropDiscMaterial::ReadFile: Unknown file type or no filename given." << std::endl;
 	return false;
-}
-
-void *CSPropDiscMaterial::ReadDataSet(std::string filename, std::string d_name, int type_id, int &rank, unsigned int &size, bool debug)
-{
-	herr_t status;
-	H5T_class_t class_id;
-	size_t type_size;
-	rank = -1;
-
-	// open hdf5 file
-	hid_t file_id = H5Fopen( filename.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT );
-	if (file_id < 0)
-	{
-		if (debug)
-			std::cerr << __func__ << ": Failed to open file, skipping..." << std::endl;
-		H5Fclose(file_id);
-		return NULL;
-	}
-
-	if (H5Lexists(file_id, d_name.c_str(), H5P_DEFAULT)<=0)
-	{
-		if (debug)
-			std::cerr << __func__ << ": Warning, dataset: \"" << d_name << "\" not found... skipping" << std::endl;
-		H5Fclose(file_id);
-		return NULL;
-	}
-
-	status = H5LTget_dataset_ndims(file_id, d_name.c_str(), &rank);
-	if (status < 0)
-	{
-		if (debug)
-			std::cerr << __func__ << ": Warning, failed to read dimension for dataset: \"" << d_name << "\" skipping..." << std::endl;
-		H5Fclose(file_id);
-		return NULL;
-	}
-
-	hsize_t* dims = new hsize_t[rank];
-	status = H5LTget_dataset_info( file_id, d_name.c_str(), dims, &class_id, &type_size);
-	if (status < 0)
-	{
-		if (debug)
-			std::cerr << __func__ << ": Warning, failed to read dataset info: \"" << d_name << "\" skipping..." << std::endl;
-		H5Fclose(file_id);
-		return NULL;
-	}
-
-	size = 1;
-	for (int n=0;n<rank;++n)
-		size*=dims[n];
-	delete[] dims; dims = NULL;
-
-	void* data;
-	if (type_id==H5T_NATIVE_FLOAT)
-		data = (void*) new float[size];
-	else if (type_id==H5T_NATIVE_INT)
-		data = (void*) new int[size];
-	else if (type_id==H5T_NATIVE_UINT8)
-		data = (void*) new uint8[size];
-	else
-	{
-		std::cerr << __func__ << ": Error, unknown data type" << std::endl;
-		H5Fclose(file_id);
-		return NULL;
-	}
-
-	status = H5LTread_dataset( file_id, d_name.c_str(), type_id, data );
-	if (status < 0)
-	{
-		if (debug)
-			std::cerr << __func__ << ": Warning, failed to read dataset: \"" << d_name << "\" skipping..." << std::endl;
-		if (type_id==H5T_NATIVE_FLOAT)
-			delete[] (float*)data;
-		else if (type_id==H5T_NATIVE_INT)
-			delete[] (int*)data;
-		else if (type_id==H5T_NATIVE_UINT8)
-			delete[] (uint8*)data;
-		H5Fclose(file_id);
-		return NULL;
-	}
-
-	H5Fclose(file_id);
-	return data;
 }
 
 bool CSPropDiscMaterial::ReadHDF5( std::string filename )
@@ -386,6 +415,7 @@ bool CSPropDiscMaterial::ReadHDF5( std::string filename )
 	}
 
 	// read database
+	delete[] m_Disc_epsR;
 	if (H5LTfind_attribute(dataset, "epsR")==1)
 	{
 		m_Disc_epsR = new float[db_size];
@@ -445,6 +475,7 @@ bool CSPropDiscMaterial::ReadHDF5( std::string filename )
 		m_Disc_Density=NULL;
 	}
 
+	H5Dclose(dataset);
 	H5Fclose(file_id);
 
 	// read mesh
@@ -458,7 +489,6 @@ bool CSPropDiscMaterial::ReadHDF5( std::string filename )
 		if ((m_mesh[n]==NULL) || (rank!=1) || (size<=1))
 		{
 			std::cerr << __func__ << ": Error, failed to read or invalid mesh, abort..." << std::endl;
-			H5Fclose(file_id);
 			return false;
 		}
 		m_Size[n]=size;

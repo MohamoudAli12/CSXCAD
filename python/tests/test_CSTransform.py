@@ -70,5 +70,47 @@ class Test_CSTransform(unittest.TestCase):
         self.tr.SetMatrix(mat)
         self.assertTrue( (self.tr.GetMatrix()==mat).all() )
 
+    def test_invers_transform(self):
+        self.tr.Translate([3, 0, 0])
+        fwd = self.tr.Transform([1, 0, 0])
+        self.assertTrue(compare_coords(fwd, [4, 0, 0]))
+
+        inv = self.tr.Transform([4, 0, 0], invers=True)
+        self.assertTrue(compare_coords(inv, [1, 0, 0]))
+
+        self.tr.Reset()
+        self.tr.RotateAxis('z', 90)
+        fwd = self.tr.Transform([1, 0, 0])
+        self.assertTrue(compare_coords(fwd, [0, 1, 0]))
+        inv = self.tr.Transform([0, 1, 0], invers=True)
+        self.assertTrue(compare_coords(inv, [1, 0, 0]))
+
+    def test_multiply_order(self):
+        self.tr.Translate([1, 0, 0])
+
+        self.tr.SetPreMultiply()
+        self.tr.RotateAxis('z', 90)
+        # pre-multiply: rotation applied before translation → rotate [1,0,0] → [0,1,0] then translate → [1,1,0]
+        self.assertTrue(compare_coords(self.tr.Transform([1, 0, 0]), [1, 1, 0]))
+
+        self.tr.Reset()
+        self.tr.Translate([1, 0, 0])
+        self.tr.SetPostMultiply()
+        self.tr.RotateAxis('z', 90)
+        # post-multiply: translation applied before rotation → translate [1,0,0] → [2,0,0] then rotate → [0,2,0]
+        self.assertTrue(compare_coords(self.tr.Transform([1, 0, 0]), [0, 2, 0]))
+
+    def test_copy_is_independent(self):
+        self.tr.Translate([1, 2, 3])
+        t2 = self.tr.copy()
+        # same matrix values
+        self.assertTrue((t2.GetMatrix() == self.tr.GetMatrix()).all())
+        # distinct Python and C++ objects
+        self.assertIsNot(t2, self.tr)
+        # modifying the copy does not affect the original
+        t2.Translate([10, 0, 0])
+        self.assertFalse((t2.GetMatrix() == self.tr.GetMatrix()).all())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -111,9 +111,9 @@ void ContinuousStructure::RemoveProperty(CSProperties* prop)
 		if (*iter==prop)
 		{
 			vProperties.erase(iter);
+			this->UpdateIDs();
 			return;
 		}
-	this->UpdateIDs();
 }
 
 void ContinuousStructure::DeleteProperty(size_t index)
@@ -134,9 +134,10 @@ void ContinuousStructure::DeleteProperty(CSProperties* prop)
 		{
 			delete *iter;
 			vProperties.erase(iter);
+			this->UpdateIDs();
+			return;
 		}
 	}
-	this->UpdateIDs();
 }
 
 int ContinuousStructure::GetIndex(CSProperties* prop)
@@ -284,7 +285,7 @@ CSProperties* ContinuousStructure::GetPropertyByCoordPriority(const double* coor
 	{
 		if ((type==CSProperties::ANY) || (vProperties.at(i)->GetType() & type))
 		{
-			locPrim = vProperties.at(i)->CheckCoordInPrimitive(coord,locPrio,dDrawingTol);
+			locPrim = vProperties.at(i)->CheckCoordInPrimitive(coord,locPrio,false,dDrawingTol);
 			if (locPrim)
 			{
 				if (winProp==NULL)
@@ -497,7 +498,6 @@ bool ContinuousStructure::Write2XML(std::string file, bool parameterised, bool s
 
 	if (Write2XML(&doc,parameterised,sparse)==false) return false;
 
-	doc.SaveFile();
 	return doc.SaveFile();
 }
 
@@ -526,8 +526,8 @@ const char* ContinuousStructure::ReadFromXML(TiXmlNode* rootNode)
 		}
 
 	TiXmlNode* grid = root->FirstChild("RectilinearGrid");
-	if (grid==NULL) { ErrString.append("Error: No RectilinearGrid found!!!\n"); return ErrString.c_str();}
-	if (clGrid.ReadFromXML(*grid)==false) { ErrString.append("Error: RectilinearGrid invalid!!!\n"); return ErrString.c_str();}
+	if (grid!=NULL)
+		if (clGrid.ReadFromXML(*grid)==false) { ErrString.append("Error: RectilinearGrid invalid!!!\n"); return ErrString.c_str();}
 
 	TiXmlNode* paraSet = root->FirstChild("ParameterSet");
 	if (paraSet!=NULL) if (clParaSet->ReadFromXML(*paraSet)==false) { ErrString.append("Warning: ParameterSet reading failed!!!\n");}
@@ -543,7 +543,7 @@ const char* ContinuousStructure::ReadFromXML(TiXmlNode* rootNode)
 		const char* cProp=PropNode->Value();
 		if (strcmp(cProp,"Unknown")==0) newProp = new CSPropUnknown(clParaSet);
 		else if (strcmp(cProp,"Material")==0) newProp = new CSPropMaterial(clParaSet);
-		else if (strcmp(cProp,"DiscMaterial")==0) newProp = new CSPropDiscMaterial(clParaSet);
+		else if (strcmp(cProp,"DiscMaterial")==0 || strcmp(cProp,"Discrete-Material")==0) newProp = new CSPropDiscMaterial(clParaSet);
 		else if (strcmp(cProp,"LorentzMaterial")==0) newProp = new CSPropLorentzMaterial(clParaSet);
 		else if (strcmp(cProp,"DebyeMaterial")==0) newProp = new CSPropDebyeMaterial(clParaSet);
 		else if (strcmp(cProp,"LumpedElement")==0) newProp = new CSPropLumpedElement(clParaSet);

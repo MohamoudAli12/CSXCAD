@@ -40,6 +40,7 @@ set( PUB_HEADERS
   CSPropProbeBox.h
   CSPropDumpBox.h
   CSPropResBox.h
+  CSModeData.h
 )
 
 set(SOURCES
@@ -82,6 +83,7 @@ set(SOURCES
   CSPropDumpBox.cpp
   CSPropResBox.cpp
   CSBackgroundMaterial.cpp
+  CSModeData.cpp
 )
 
 # CSXCAD library
@@ -100,7 +102,11 @@ TARGET_LINK_LIBRARIES( CSXCAD
 set_target_properties(CSXCAD PROPERTIES VERSION ${LIB_VERSION_STRING}
                                           SOVERSION ${LIB_VERSION_MAJOR})
 
-INSTALL(TARGETS CSXCAD DESTINATION lib${LIB_SUFFIX})
+if (WIN32)
+    INSTALL(TARGETS CSXCAD RUNTIME DESTINATION bin ARCHIVE DESTINATION lib${LIB_SUFFIX})
+else()
+    INSTALL(TARGETS CSXCAD DESTINATION lib${LIB_SUFFIX})
+endif()
 
 INSTALL(FILES ${PUB_HEADERS} DESTINATION include/CSXCAD)
 

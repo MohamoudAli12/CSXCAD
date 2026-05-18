@@ -40,6 +40,7 @@ from CSXCAD.ParameterObjects cimport _ParameterSet, ParameterSet
 cimport CSXCAD.CSProperties
 cimport CSXCAD.CSPrimitives as c_CSPrimitives
 from CSXCAD.CSPrimitives import CSPrimitives
+from CSXCAD.CSTransform cimport _CSTransform, CSTransform
 from CSXCAD.Utilities import CheckNyDir
 from libc.stdint cimport uintptr_t
 
@@ -89,6 +90,8 @@ cdef class CSProperties:
             prop = CSPropDebyeMaterial(pset, no_init=no_init, **kw)
         elif p_type == ABSORBING_BC:
             prop = CSPropAbsorbingBC(pset, no_init=no_init, **kw)
+        elif p_type == DISCRETE_MATERIAL + MATERIAL:
+            prop = CSPropDiscMaterial(pset, no_init=no_init, **kw)
 
         return prop
 
@@ -125,7 +128,11 @@ cdef class CSProperties:
             prop = CSPropDebyeMaterial(pset, no_init=no_init, **kw)
         elif type_str=='AbsorbingBC':
             prop = CSPropAbsorbingBC(pset, no_init=no_init, **kw)
-        
+        elif type_str=='Discrete-Material':
+            prop = CSPropDiscMaterial(pset, no_init=no_init, **kw)
+        elif type_str=='DiscMaterial':
+            prop = CSPropDiscMaterial(pset, no_init=no_init, **kw)
+
         return prop
 
     @staticmethod
@@ -137,6 +144,9 @@ cdef class CSProperties:
         if prop is not None:
             return prop
         prop = CSProperties.fromType(ptr.GetType(), pset=None, no_init=True)
+        if prop is None:
+            prop = CSProperties.__new__(CSProperties)
+            prop.thisptr = NULL
         prop._SetPtr(ptr)
         return prop
 
@@ -303,6 +313,21 @@ cdef class CSProperties:
 
     def SetVisibility(self, val):
         self.thisptr.SetVisibility(val)
+
+    def SetCoordInputType(self, int ctype):
+        """ SetCoordInputType(ctype)
+
+        Set the coordinate system used when evaluating weight functions.
+        Use ``CSRectGrid.CoordinateSystem.CARTESIAN`` (0) or ``CSRectGrid.CoordinateSystem.CYLINDRICAL`` (1).
+        """
+        self.thisptr.SetCoordInputType(<CoordinateSystem>ctype)
+
+    def GetCoordInputType(self):
+        """ GetCoordInputType() -> int
+
+        Return the active coordinate system (0=Cartesian, 1=Cylindrical).
+        """
+        return self.thisptr.GetCoordInputType()
 
     def ExistAttribute(self, name):
         """ ExistAttribute(name)
@@ -498,6 +523,19 @@ cdef class CSProperties:
         CSXCAD.CSPrimitives.CSPrimPolyhedronReader : See here for details on primitive arguments
         """
         return self.__CreatePrimitive(c_CSPrimitives.POLYHEDRONREADER, filename=filename, **kw)
+
+    def AddMultiBox(self, boxes=None, **kw):
+        """Add a multi-box primitive to this property.
+
+        :param boxes: list of (start, stop) pairs, each a length-3 array
+
+        See Also
+        --------
+        CSXCAD.CSPrimitives.CSPrimMultiBox
+        """
+        if boxes is not None:
+            kw['boxes'] = boxes
+        return self.__CreatePrimitive(c_CSPrimitives.MULTIBOX, **kw)
 
     def __CreatePrimitive(self, prim_type, **kw):
         pset = self.GetParameterSet()
@@ -751,15 +789,23 @@ cdef class CSPropLumpedElement(CSProperties):
 
     A lumped element can consist of a resistor `R`, capacitor `C` and inductance
     `L` active in a given direction `ny`.
-    If Caps are enable, a small PEC plate is added to each
-    end of the lumped element to ensure contact to a connecting line
+    If Caps are enabled, a small PEC plate is added to each end of the lumped
+    element to ensure contact to a connecting line.
 
-    :param ny: int or str -- direction:  0,1,2 or 'x','y','z' for the orientation of the lumped element
-    :param caps: bool     -- enable/disable caps
-    :param R:  float      -- lumped resistance value
-    :param C:  float      -- lumped capacitance value
-    :param L:  float      -- lumped inductance values
-    :param LEtype:  int      -- lumped element type
+    :param ny:     int or str -- direction: 0,1,2 or 'x','y','z'
+    :param caps:   bool       -- enable/disable end caps (default: True)
+    :param R:      float      -- lumped resistance in Ohm
+    :param C:      float      -- lumped capacitance in Farad
+    :param L:      float      -- lumped inductance in Henry
+    :param LEtype: int        -- circuit topology: 0 = parallel (default), 1 = series
+                                 Parallel: R, C and L are all in parallel.
+                                 Series: R, L and C are in series (use this for a
+                                 series inductor, e.g. to tune antenna length).
+
+    Example — series inductor::
+
+        ind = CSX.AddLumpedElement('Inductor', ny=0, caps=True, L=10e-9, LEtype=1)
+        ind.AddBox([0, 0, 0], [1e-3, 1e-3, 1e-3])
     """
     def __init__(self, ParameterSet pset, *args, no_init=False, **kw):
         if no_init:
@@ -951,6 +997,9 @@ cdef class CSPropExcitation(CSProperties):
         if 'delay' in kw:
             self.SetDelay(kw['delay'])
             del kw['delay']
+        if 'weight_file' in kw:
+            self.SetWeightFile(kw['weight_file'])
+            del kw['weight_file']
         super(CSPropExcitation, self).__init__(pset, *args, **kw)
 
     def SetExcitType(self, val):
@@ -967,7 +1016,6 @@ cdef class CSPropExcitation(CSProperties):
         :return: int -- excitation type (see above)
         """
         return (<_CSPropExcitation*>self.thisptr).GetExcitType()
-
 
     def SetEnabled(self, val):
         """ Enable/Disable the excitation"""
@@ -1052,6 +1100,57 @@ cdef class CSPropExcitation(CSProperties):
             func[n] = (<_CSPropExcitation*>self.thisptr).GetWeightFunction(n).decode('UTF-8')
         return func
 
+    def SetWeightFile(self, fileName):
+        """ SetWeightFile(fileName)
+
+        Set an HDF5 file as the spatial weight profile for this excitation
+        (alternative to SetWeightFunction). The file must contain datasets
+        /x, /y (axis vectors) and /Vx, /Vy (transverse field components,
+        shape nx x ny).
+
+        :param fileName: str -- path to the HDF5 weight file
+        """
+        assert type(fileName) is str, '"fileName" must be a str'
+        (<_CSPropExcitation*>self.thisptr).SetWeightFile(fileName.encode('UTF-8'))
+
+    def GetWeightFile(self):
+        """ GetWeightFile() -> str """
+        return (<_CSPropExcitation*>self.thisptr).GetWeightFile().decode('UTF-8')
+
+    def SetWeightOrigin(self, origin):
+        """ SetWeightOrigin(origin)
+
+        Set the coordinate origin used when evaluating the weight function or
+        weight file. Coordinates are shifted by this offset before evaluation,
+        so the weight can be defined relative to a port corner (0,0,0) rather
+        than the global simulation origin.
+
+        :param origin: (3,) array -- [x, y, z] in drawing units
+        """
+        assert len(origin) == 3, 'origin must have 3 elements'
+        (<_CSPropExcitation*>self.thisptr).SetWeightOrigin(origin[0], origin[1], origin[2])
+
+    def GetWeightOrigin(self):
+        """ GetWeightOrigin() -> [float, float, float] """
+        return [(<_CSPropExcitation*>self.thisptr).GetWeightOrigin(n) for n in range(3)]
+
+    def GetWeightedExcitation(self, int ny, coords):
+        """ GetWeightedExcitation(ny, coords)
+
+        Evaluate the weighted excitation amplitude for component ny at the
+        given coordinates, combining excitation vector, weight function, and
+        mode file (if set).
+
+        :param ny:     int -- field component (0=x, 1=y, 2=z)
+        :param coords: (3,) array -- Cartesian coordinates [x, y, z]
+        :returns:      float
+        """
+        cdef double c[3]
+        c[0] = coords[0]
+        c[1] = coords[1]
+        c[2] = coords[2]
+        return (<_CSPropExcitation*>self.thisptr).GetWeightedExcitation(ny, c)
+
     def SetFrequency(self, val):
         """ SetFrequency(val)
 
@@ -1097,11 +1196,12 @@ cdef class CSPropProbeBox(CSProperties):
     * 10 : for waveguide voltage mode matching
     * 11 : for waveguide current mode matching
 
-    :param p_type:       probe type (default is 0)
-    :param weight:       weighting factor (default is 1)
-    :param frequency:    dump in the frequency domain at the given samples (in Hz)
-    :param mode_function: A mode function (used only with type 3/4 in openEMS)
-    :param norm_dir:     necessary for current probing box with dimension not 2
+    :param p_type:           probe type (default is 0)
+    :param weight:           weighting factor (default is 1)
+    :param frequency:        dump in the frequency domain at the given samples (in Hz)
+    :param mode_function:    A mode function (used only with probe type 10/11).
+    :param norm_dir:         Necessary for current probing box with dimension not 2
+
     """
     def __init__(self, ParameterSet pset, *args, no_init=False, **kw):
         if no_init:
@@ -1194,11 +1294,49 @@ cdef class CSPropProbeBox(CSProperties):
 
     def SetModeFunction(self, mode_fun):
         """ SetModeFunction(mode_fun)
+
+        Set the spatial mode function strings for mode-matching (list of 3 strings,
+        one per Cartesian component).
         """
         assert len(mode_fun)==3, 'SetModeFunction: mode_fun must be list of length 3'
-        self.AddAttribute('ModeFunctionX', str(mode_fun[0]))
-        self.AddAttribute('ModeFunctionY', str(mode_fun[1]))
-        self.AddAttribute('ModeFunctionZ', str(mode_fun[2]))
+        for n in range(3):
+            (<_CSPropProbeBox*>self.thisptr).SetModeFunction(n, str(mode_fun[n]).encode('UTF-8'))
+
+    def GetModeFunction(self):
+        """ GetModeFunction() -> list of 3 strings """
+        return [(<_CSPropProbeBox*>self.thisptr).GetModeFunction(n).decode('UTF-8') for n in range(3)]
+
+    def SetModeFile(self, fileName):
+        """ SetModeFile(fileName)
+
+        Set an HDF5 file as the mode profile for this probe
+        (alternative to SetModeFunction). Stored and serialized by CSXCAD;
+        the coordinate evaluation and mode-matching is performed by the simulator.
+
+        :param fileName: str -- path to the HDF5 mode file
+        """
+        assert type(fileName) is str, '"fileName" must be a str'
+        (<_CSPropProbeBox*>self.thisptr).SetModeFile(fileName.encode('UTF-8'))
+
+    def GetModeFile(self):
+        """ GetModeFile() -> str """
+        return (<_CSPropProbeBox*>self.thisptr).GetModeFile().decode('UTF-8')
+
+    def SetModeOrigin(self, origin):
+        """ SetModeOrigin(origin)
+
+        Set the coordinate origin for mode function/file evaluation.
+        Stored and serialized by CSXCAD; applied by the simulator during
+        mode-matching integration.
+
+        :param origin: (3,) array -- [x, y, z] in drawing units
+        """
+        assert len(origin) == 3, 'origin must have 3 elements'
+        (<_CSPropProbeBox*>self.thisptr).SetModeOrigin(origin[0], origin[1], origin[2])
+
+    def GetModeOrigin(self):
+        """ GetModeOrigin() -> [float, float, float] """
+        return [(<_CSPropProbeBox*>self.thisptr).GetModeOrigin(n) for n in range(3)]
 
 ###############################################################################
 cdef class CSPropDumpBox(CSPropProbeBox):
@@ -1503,6 +1641,7 @@ cdef class CSPropLorentzMaterial(CSPropDispersiveMaterial):
             CSPropDispersiveMaterial._GetDispersiveMaterialWeightDir(self, prop_name, order, ny)
 
     def _SetDispersiveMaterialWeightDir(self, prop_name, order, ny, val):
+        val = val.encode('UTF-8')
         if prop_name == 'eps_plasma':
             return (<_CSPropLorentzMaterial*>self.thisptr).SetEpsPlasmaFreqWeightFunction(order, val, ny)
         elif prop_name == 'eps_pole_freq':
@@ -1561,4 +1700,116 @@ cdef class CSPropDebyeMaterial(CSPropDispersiveMaterial):
             (<_CSPropDebyeMaterial*>self.thisptr).SetEpsRelaxTimeWeightFunction(order, val, ny)
         else:
             CSPropDispersiveMaterial._SetDispersiveMaterialWeightDir(self, prop_name, order, ny, val)
+
+###############################################################################
+cdef class CSPropDiscMaterial(CSPropMaterial):
+    """Discrete material property loaded from an HDF5 file.
+
+    The file encodes a voxel grid of material indices that map to epsilon,
+    mue, kappa, sigma, and density values.
+
+    :param filename:          str  -- path to the HDF5 material file
+    :param scale:             float -- spatial scale factor (default 1)
+    :param use_db_background: bool  -- index 0 maps to background (default True)
+    """
+    def __init__(self, ParameterSet pset, *args, no_init=False, **kw):
+        if no_init:
+            super(CSPropDiscMaterial, self).__init__(pset, no_init=True)
+            return
+        if not self.thisptr:
+            self.thisptr = <_CSProperties*> new _CSPropDiscMaterial(pset.thisptr)
+        if 'filename' in kw:
+            self.SetFilename(kw['filename'])
+            del kw['filename']
+        if 'filetype' in kw:
+            self.SetFileType(kw['filetype'])
+            del kw['filetype']
+        if 'scale' in kw:
+            self.SetScale(kw['scale'])
+            del kw['scale']
+        if 'use_db_background' in kw:
+            self.SetUseDataBaseForBackground(kw['use_db_background'])
+            del kw['use_db_background']
+        super(CSPropDiscMaterial, self).__init__(pset, *args, **kw)
+
+    def SetFilename(self, fn):
+        """Set the HDF5 material file path."""
+        (<_CSPropDiscMaterial*>self.thisptr).SetFilename(fn.encode('UTF-8'))
+
+    def GetFilename(self):
+        """Get the HDF5 material file path."""
+        return (<_CSPropDiscMaterial*>self.thisptr).GetFilename().decode('UTF-8')
+
+    def SetFileType(self, ftype):
+        """Set the file type (0 = HDF5)."""
+        (<_CSPropDiscMaterial*>self.thisptr).SetFileType(ftype)
+
+    def GetFileType(self):
+        """Get the file type (0 = HDF5)."""
+        return (<_CSPropDiscMaterial*>self.thisptr).GetFileType()
+
+    def SetScale(self, val):
+        """Set the spatial scale factor applied to mesh coordinates."""
+        (<_CSPropDiscMaterial*>self.thisptr).SetScale(val)
+
+    def GetScale(self):
+        """Get the spatial scale factor."""
+        return (<_CSPropDiscMaterial*>self.thisptr).GetScale()
+
+    def SetUseDataBaseForBackground(self, val):
+        """Set whether database index 0 is used as background material."""
+        (<_CSPropDiscMaterial*>self.thisptr).SetUseDataBaseForBackground(val)
+
+    def GetUseDataBaseForBackground(self):
+        """Get whether database index 0 is used as background material."""
+        return (<_CSPropDiscMaterial*>self.thisptr).GetUseDataBaseForBackground()
+
+    def GetTransform(self):
+        """Return the affine transform applied to lookup coordinates, or None if not set."""
+        return CSTransform.fromPtr((<_CSPropDiscMaterial*>self.thisptr).GetTransform())
+
+    def SetTransform(self, CSTransform transform):
+        """Set the affine transform applied to lookup coordinates before the scale factor.
+
+        Ownership is transferred to the property. Use transform.copy() first if
+        you need to keep an independent copy. Pass None to remove the transform.
+        """
+        if transform is None:
+            (<_CSPropDiscMaterial*>self.thisptr).SetTransform(NULL)
+        else:
+            (<_CSPropDiscMaterial*>self.thisptr).SetTransform(transform.thisptr)
+
+    def ReadFile(self):
+        """Read the material data from the HDF5 file. Returns True on success."""
+        return (<_CSPropDiscMaterial*>self.thisptr).ReadFile()
+
+    def GetEpsilonWeighted(self, int ny, coords):
+        """Return epsilon at the given coordinates for direction ny (0/1/2)."""
+        cdef double c[3]
+        c[0] = coords[0]; c[1] = coords[1]; c[2] = coords[2]
+        return (<_CSPropDiscMaterial*>self.thisptr).GetEpsilonWeighted(ny, c)
+
+    def GetMueWeighted(self, int ny, coords):
+        """Return mue at the given coordinates for direction ny (0/1/2)."""
+        cdef double c[3]
+        c[0] = coords[0]; c[1] = coords[1]; c[2] = coords[2]
+        return (<_CSPropDiscMaterial*>self.thisptr).GetMueWeighted(ny, c)
+
+    def GetKappaWeighted(self, int ny, coords):
+        """Return kappa at the given coordinates for direction ny (0/1/2)."""
+        cdef double c[3]
+        c[0] = coords[0]; c[1] = coords[1]; c[2] = coords[2]
+        return (<_CSPropDiscMaterial*>self.thisptr).GetKappaWeighted(ny, c)
+
+    def GetSigmaWeighted(self, int ny, coords):
+        """Return sigma at the given coordinates for direction ny (0/1/2)."""
+        cdef double c[3]
+        c[0] = coords[0]; c[1] = coords[1]; c[2] = coords[2]
+        return (<_CSPropDiscMaterial*>self.thisptr).GetSigmaWeighted(ny, c)
+
+    def GetDensityWeighted(self, coords):
+        """Return density at the given coordinates."""
+        cdef double c[3]
+        c[0] = coords[0]; c[1] = coords[1]; c[2] = coords[2]
+        return (<_CSPropDiscMaterial*>self.thisptr).GetDensityWeighted(c)
 

@@ -39,7 +39,7 @@ public:
 	//! Create a copy of this property. Optional: Copy all primitives assigned to this property too.
 	virtual CSProperties* GetCopy(bool incl_prim=false) {return new CSPropDiscMaterial(this, incl_prim);}
 
-	virtual const std::string GetTypeXMLString() const {return std::string("Discrete-Material");}
+	virtual const std::string GetTypeXMLString() const {return std::string("DiscMaterial");}
 
 	virtual double GetEpsilonWeighted(int ny, const double* coords);
 	virtual double GetMueWeighted(int ny, const double* coords);
@@ -50,9 +50,30 @@ public:
 
 	//! Set true if database index 0 is used as background material (default), or false if CSPropMaterial should be used as index 0
 	virtual void SetUseDataBaseForBackground(bool val) {m_DB_Background=val;}
+	bool GetUseDataBaseForBackground() const {return m_DB_Background;}
 
+	void SetFilename(const std::string& fn) {m_Filename=fn; m_FileRead=false;}
+	std::string GetFilename() const {return m_Filename;}
+
+	void SetFileType(int type) {m_FileType=type;}
+	int GetFileType() const {return m_FileType;}
+
+	//! Get the affine transform applied to lookup coordinates before the scale factor.
+	/*! Returns NULL if no transform has been set.
+	 *  Coordinate lookup order: InvertTransform(coord) -> divide by Scale -> look up in mesh. */
 	CSTransform* GetTransform() {return m_Transform;}
 
+	//! Set (and take ownership of) an affine transform applied to lookup coordinates.
+	/*! The transform is applied before the scale factor: coords are first
+	 *  inverse-transformed, then divided by Scale, then looked up in the mesh.
+	 *  Any previously set transform is deleted. Pass NULL to remove the transform. */
+	void SetTransform(CSTransform* transform);
+
+	//! Set the isotropic scale factor applied to lookup coordinates after the transform.
+	/*! Coordinates are divided by Scale before the mesh lookup, so Scale acts as
+	 *  a unit conversion: e.g. Scale=1e-3 if the mesh is in mm but coords are in m.
+	 *  Applied after the optional affine transform (see SetTransform). */
+	void SetScale(double val) {m_Scale=val;}
 	double GetScale() {return m_Scale;}
 
 	virtual bool Write2XML(TiXmlNode& root, bool parameterised=true, bool sparse=false);
@@ -83,9 +104,10 @@ protected:
 	float *m_Disc_Density;
 	double m_Scale;
 	bool m_DB_Background;
+	bool m_FileRead;
 	CSTransform* m_Transform;
 
+	void EnsureFileLoaded();
 	bool ReadHDF5(std::string filename);
-	void* ReadDataSet(std::string filename, std::string d_name, int type_id, int &rank, unsigned int &size, bool debug=false);
 };
 

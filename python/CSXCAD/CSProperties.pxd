@@ -22,7 +22,10 @@ from libcpp cimport bool
 
 from CSXCAD.ParameterObjects cimport _ParameterSet, ParameterSet
 from CSXCAD.CSPrimitives cimport _CSPrimitives, CSPrimitives
+from CSXCAD.CSTransform cimport _CSTransform, CSTransform
 from CSXCAD.CSXCAD cimport ContinuousStructure
+
+from CSXCAD.CSRectGrid cimport CoordinateSystem
 
 cdef extern from "CSXCAD/CSProperties.h":
     cpdef enum PropertyType "CSProperties::PropertyType":
@@ -78,6 +81,9 @@ cdef extern from "CSXCAD/CSProperties.h":
 
             bool GetVisibility()
             void SetVisibility(bool val)
+
+            void SetCoordInputType(CoordinateSystem ctype)
+            int  GetCoordInputType()
 
 cdef class CSProperties:
     cdef  _CSProperties *thisptr
@@ -151,7 +157,6 @@ cdef extern from "CSXCAD/CSPropLumpedElement.h":
     cpdef enum LEtype "CSPropLumpedElement::LEtype":
         LE_PARALLEL     "CSPropLumpedElement::PARALLEL"
         LE_SERIES       "CSPropLumpedElement::SERIES"
-        LE_INVALID      "CSPropLumpedElement::INVALID"
 
 cdef extern from "CSXCAD/CSPropLumpedElement.h":
     cdef cppclass _CSPropLumpedElement "CSPropLumpedElement" (_CSProperties):
@@ -217,6 +222,13 @@ cdef extern from "CSXCAD/CSPropExcitation.h":
             int SetWeightFunction(string fct, int ny)
             string GetWeightFunction(int ny)
 
+            void    SetWeightFile(string fileName)
+            string  GetWeightFile()
+            void    SetWeightOrigin(double ox, double oy, double oz)
+            double  GetWeightOrigin(int n)
+
+            double  GetWeightedExcitation(int ny, double* coords)
+
             void SetFrequency(double val)
             double GetFrequency()
 
@@ -238,6 +250,13 @@ cdef extern from "CSXCAD/CSPropProbeBox.h":
 
             void SetNormalDir(unsigned int ndir)
             int GetNormalDir()
+
+            void SetModeFile(string fileName)
+            string GetModeFile()
+            void SetModeFunction(int ny, string fct)
+            string GetModeFunction(int ny)
+            void SetModeOrigin(double ox, double oy, double oz)
+            double GetModeOrigin(int n)
 
             size_t CountFDSamples()
             vector[double]* GetFDSamples()
@@ -365,4 +384,28 @@ cdef extern from "CSXCAD/CSPropDebyeMaterial.h":
             double GetEpsRelaxTimeWeighted(int order, int ny, double* coords)
 
 cdef class CSPropDebyeMaterial(CSPropDispersiveMaterial):
+    pass
+
+##############################################################################
+cdef extern from "CSXCAD/CSPropDiscMaterial.h":
+    cdef cppclass _CSPropDiscMaterial "CSPropDiscMaterial" (_CSPropMaterial):
+        _CSPropDiscMaterial(_ParameterSet*) except +
+        void SetFilename(string fn)
+        string GetFilename()
+        void SetFileType(int type)
+        int GetFileType()
+        void SetScale(double val)
+        double GetScale()
+        void SetUseDataBaseForBackground(bool val)
+        bool GetUseDataBaseForBackground()
+        bool ReadFile()
+        _CSTransform* GetTransform()
+        void SetTransform(_CSTransform* transform)
+        double GetEpsilonWeighted(int ny, const double* coords)
+        double GetMueWeighted(int ny, const double* coords)
+        double GetKappaWeighted(int ny, const double* coords)
+        double GetSigmaWeighted(int ny, const double* coords)
+        double GetDensityWeighted(const double* coords)
+
+cdef class CSPropDiscMaterial(CSPropMaterial):
     pass

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # cython: language_level=3
 #
-# Copyright (C) 2015,20016 Thorsten Liebig (Thorsten.Liebig@gmx.de)
+# Copyright (C) 2015,2016 Thorsten Liebig (Thorsten.Liebig@gmx.de)
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published
@@ -40,7 +40,7 @@ def CheckNyDir(ny):
 def GetMultiDirs(dirs):
     assert type(dirs)==str, 'GetMultiDirs: dirs must be of type str'
     dirs = ''.join(sorted(dirs))
-    if dirs == 'all' or dirs == 'xyz' or dirs == 'raz':
+    if dirs == 'all' or dirs == 'xyz' or dirs == 'arz':
         return [0, 1, 2]
     elif dirs == 'x' or dirs == 'r':
         return [0,]
@@ -48,7 +48,7 @@ def GetMultiDirs(dirs):
         return [1,]
     elif dirs == 'z':
         return [2,]
-    elif dirs == 'xy' or dirs == 'ra':
+    elif dirs == 'xy' or dirs == 'ar':
         return [0, 1]
     elif dirs == 'yz' or dirs == 'az':
         return [1, 2]
