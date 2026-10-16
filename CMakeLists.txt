@@ -20,8 +20,8 @@ endif()
 
 # default
 set(LIB_VERSION_MAJOR 0)
-set(LIB_VERSION_MINOR 6)
-set(LIB_VERSION_PATCH 3)
+set(LIB_VERSION_MINOR 7)
+set(LIB_VERSION_PATCH 0)
 set(LIB_VERSION_STRING ${LIB_VERSION_MAJOR}.${LIB_VERSION_MINOR}.${LIB_VERSION_PATCH})
 
 set(VERSION "v${LIB_VERSION_STRING}")
@@ -161,6 +161,15 @@ set( vtk_LIBS ${VTK_LIBRARIES} )
 message(STATUS "vtk libraries " ${vtk_LIBS})
 # depend on fparser.hh
 ADD_SUBDIRECTORY( src )
+
+# C++ unit tests. Off by default: they are of no use to somebody installing
+# CSXCAD, and building them needs nothing the library does not need anyway.
+# Enable with -DCSXCAD_BUILD_TESTS=ON, then run them with `ctest`.
+option(CSXCAD_BUILD_TESTS "Build the C++ unit tests in tests/" OFF)
+if (CSXCAD_BUILD_TESTS)
+  enable_testing()
+  ADD_SUBDIRECTORY( tests )
+endif()
 
 INSTALL(DIRECTORY matlab DESTINATION share/CSXCAD)
 

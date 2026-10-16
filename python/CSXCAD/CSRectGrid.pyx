@@ -26,9 +26,17 @@ cimport CSXCAD.CSRectGrid
 from CSXCAD.Utilities import CheckNyDir
 from CSXCAD.SmoothMeshLines import SmoothMeshLines
 from libc.stdint cimport uintptr_t
+import weakref
+from CSXCAD.CSObject cimport CSDestructionCallback, wrapper_destroyed
+from CSXCAD.CSObject cimport resolve_owner, GRID
+from CSXCAD.Utilities import RegisterWrapperFactory
+from operator import index
 
 cdef class CSRectGrid:
-    _instances = {}
+    _instances = weakref.WeakValueDictionary()
+    """ Wrapper per live C++ instance, so that looking the same object up twice
+    gives the same wrapper. Weak on purpose: a wrapper nobody holds any more must
+    be collectable, otherwise it would keep its owner alive forever. """
 
     @staticmethod
     cdef fromPtr(_CSRectGrid  *ptr):
@@ -36,7 +44,9 @@ cdef class CSRectGrid:
             return None
         cdef CSRectGrid cls
         cls = CSRectGrid._instances.get(<uintptr_t>ptr, None)
-        if cls is not None:
+        # an entry whose C++ object is already gone must not be handed out: the
+        # weak reference only drops it once the wrapper itself dies
+        if cls is not None and cls.thisptr != NULL:
             return cls
         cls = CSRectGrid(no_init=True)
         cls._SetPtr(ptr)
@@ -64,16 +74,37 @@ cdef class CSRectGrid:
 
         assert len(kw)==0, 'Unknown keyword arguments: "{}"'.format(kw)
 
+    @staticmethod
+    def _from_address(addr):
+        """ Wrapper for the C++ instance at `addr`, \sa CSXCAD.Utilities """
+        return CSRectGrid.fromPtr(<_CSRectGrid*><uintptr_t>addr)
+
     cdef _SetPtr(self, _CSRectGrid *ptr):
         if self.thisptr != NULL and self.thisptr != ptr:
             raise Exception('Different C++ class pointer already assigned to python wrapper class!')
         self.thisptr = ptr
         CSRectGrid._instances[<uintptr_t>self.thisptr] = self
+        self._owner = resolve_owner(self.thisptr)
+        self.thisptr.SetDestructionCallback(<CSDestructionCallback>wrapper_destroyed,
+                                           <void*>&self.thisptr)
 
     def __dealloc__(self):
-        if not self.no_init:
-            del CSRectGrid._instances[<uintptr_t>self.thisptr]
-            del self.thisptr
+        # drop the hook first: for an owned grid we delete the C++ object right
+        # below, for a borrowed one it may already have been invalidated
+        if self.thisptr != NULL:
+            self.thisptr.SetDestructionCallback(NULL, NULL)
+            if not self.no_init:
+                del self.thisptr
+
+    cdef _CSRectGrid* _ptr(self) except NULL:
+        """ Access the C++ instance, raising if it has already been destroyed.
+
+        The C++ instance is owned by the ContinuousStructure and can be destroyed while this
+        wrapper is still referenced from python. \sa wrapper_destroyed
+        """
+        if self.thisptr == NULL:
+            raise RuntimeError('wrapped C++ object of type {} has been deleted'.format(type(self).__name__))
+        return self.thisptr
 
     def SetMeshType(self, cs_type):
         """ SetMeshType(cs_type)
@@ -83,10 +114,10 @@ cdef class CSRectGrid:
         :param cs_type: coordinate system (0 : Cartesian, 1 : Cylindrical)
         """
         assert cs_type in [CARTESIAN, CYLINDRICAL], 'Unknown coordinate system: {}'.format(cs_type)
-        self.thisptr.SetMeshType(cs_type)
+        self._ptr().SetMeshType(cs_type)
 
     def GetMeshType(self):
-        return self.thisptr.GetMeshType()
+        return self._ptr().GetMeshType()
 
     def SetLines(self, ny, lines):
         """ SetLines(ny, lines)
@@ -94,15 +125,19 @@ cdef class CSRectGrid:
         Set an array of lines. This will clear all previous defined lines in
         the given direction.
 
+        .. versionchanged:: 0.7.0
+            The lines are sorted and duplicates are dropped, `lines` does not
+            have to be given in increasing order any more.
+
         :param ny: int or str -- direction definition
         :param lines: array -- list of lines to be set in the given direction
         """
         ny = CheckNyDir(ny)
 
         assert len(lines)>0, 'SetLines: "lines" must be an array or list'
-        self.thisptr.ClearLines(ny)
+        self._ptr().ClearLines(ny)
         for n in range(len(lines)):
-            self.thisptr.AddDiscLine(ny, lines[n])
+            self._ptr().AddDiscLine(ny, lines[n])
 
     def AddLine(self, ny, line):
         """ AddLine(ny, lines)
@@ -110,51 +145,78 @@ cdef class CSRectGrid:
         Add an array of lines. This will *not* clear the previous defined lines in
         the given direction.
 
+        .. versionchanged:: 0.7.0
+            The lines are sorted into the existing lines, a line that is already
+            present is dropped.
+
         :param ny: int or str -- direction definition
         :param lines: array -- list of lines to be added in the given direction
         """
         ny = CheckNyDir(ny)
         if np.isscalar(line):
-            self.thisptr.AddDiscLine(ny, line)
+            self._ptr().AddDiscLine(ny, line)
             return
         assert len(line)>0, 'AddLine: "lines" must be a float, array or list'
         for n in range(len(line)):
-            self.thisptr.AddDiscLine(ny, line[n])
+            self._ptr().AddDiscLine(ny, line[n])
 
     def GetQtyLines(self, ny):
         """ GetQtyLines(ny)
 
+        Get the number of lines in a given direction `ny`.
+
+        .. versionchanged:: 0.7.0
+            Duplicate lines are dropped and are not counted any more.
+
         :param ny: int or str -- direction definition
         """
         ny = CheckNyDir(ny)
-        return self.thisptr.GetQtyLines(ny)
+        return self._ptr().GetQtyLines(ny)
 
     def GetLine(self, ny, idx):
         """ GetLine(ny, idx)
 
         Get the line in a given direction `ny` and index
 
+        The lines are always sorted and unique, index 0 is the smallest line.
+
+        .. versionchanged:: 0.7.0
+            An out of range index raises an :class:`IndexError` instead of
+            returning 0, and a negative index counts from the end.
+
         :param ny: int or str -- direction definition
-        :param idx: int  -- line index
+        :param idx: int  -- line index, negative counts from the end
+        :returns: float -- line position
+        :raises IndexError: if `idx` is out of range
         """
         ny = CheckNyDir(ny)
-        return self.thisptr.GetLine(ny, idx)
+        cdef size_t N = self._ptr().GetQtyLines(ny)
+        # bounds check as Python ints, idx may be out of the size_t range
+        n_lines = int(N)
+        idx = index(idx)
+        pos = idx + n_lines if idx<0 else idx
+        if pos<0 or pos>=n_lines:
+            raise IndexError('GetLine: line index {} out of range for {} lines'.format(idx, n_lines))
+        idx = pos
+        return self._ptr().GetLine(ny, idx)
 
     def GetLines(self, ny, do_sort=True):
         """ GetLines(ny, do_sort=True)
 
-        Get all lines in a given direction `ny`.
+        Get all lines in a given direction `ny`, sorted and unique.
+
+        .. deprecated:: 0.7.0
+            The `do_sort` argument is ignored, the lines are always sorted and
+            unique.
 
         :param ny: int or str -- direction definition
-        :param do_sort: bool  -- sort lines (default True)
+        :param do_sort: bool  -- ignored
         """
         ny = CheckNyDir(ny)
-        if do_sort:
-            self.thisptr.Sort(ny)
-        cdef size_t N = self.thisptr.GetQtyLines(ny)
+        cdef size_t N = self._ptr().GetQtyLines(ny)
         lines = np.zeros(N)
         for n in range(N):
-            lines[n] = self.thisptr.GetLine(ny, n)
+            lines[n] = self._ptr().GetLine(ny, n)
         return lines
 
     def ClearLines(self, ny):
@@ -165,55 +227,61 @@ cdef class CSRectGrid:
         :param ny: int or str -- direction definition
         """
         ny = CheckNyDir(ny)
-        self.thisptr.ClearLines(ny)
+        self._ptr().ClearLines(ny)
 
-    def SmoothMeshLines(self, ny, max_res, ratio=1.5):
-        """ SmoothMeshLines(ny, max_res, ratio=1.5)
+    def SmoothMeshLines(self, ny, max_res, ratio=1.5, check_symmetry=True):
+        """ SmoothMeshLines(ny, max_res, ratio=1.5, check_symmetry=True)
 
         Smooth all mesh lines in the given direction with a max. allowed resolution.
 
         :param ny: int or str -- direction definition or 'all' for all directions
         :param max_res: float -- max. allowed resolution
         :param ratio:   float -- max. allowed ration of mesh smoothing de/increase
+        :param check_symmetry: bool -- detect a symmetric mesh and smooth only one
+            half (default True); set False to disable and smooth the full line set
         """
         if ny=='all':
             for n in range(3):
-                self.SmoothMeshLines(n, max_res, ratio)
+                self.SmoothMeshLines(n, max_res, ratio, check_symmetry)
         else:
             lines = self.GetLines(ny)
-            lines = SmoothMeshLines(lines, max_res, ratio)
+            lines = SmoothMeshLines(lines, max_res, ratio, check_symmetry=check_symmetry)
             self.SetLines(ny, lines)
 
     def Clear(self):
         """
         Clear all lines and delta unit.
         """
-        self.thisptr.clear()
+        self._ptr().clear()
 
     def SetDeltaUnit(self, unit):
         """ SetDeltaUnit(unit)
 
         Set the drawing unit for all mesh lines. Default is 1 (m)
         """
-        self.thisptr.SetDeltaUnit(unit)
+        self._ptr().SetDeltaUnit(unit)
 
     def GetDeltaUnit(self):
         """
         Get the drawing unit for all mesh lines.
         """
-        return self.thisptr.GetDeltaUnit()
+        return self._ptr().GetDeltaUnit()
 
     def Sort(self, ny='all'):
         """ Sort(ny='all')
 
         Sort mesh lines in the given direction or all directions.
+
+        .. deprecated:: 0.7.0
+            The mesh lines are always sorted and unique, this method has no
+            effect.
         """
         if ny=='all':
             for n in range(3):
-                self.thisptr.Sort(n)
+                self._ptr().Sort(n)
         else:
             ny = CheckNyDir(ny)
-            self.thisptr.Sort(ny)
+            self._ptr().Sort(ny)
 
     def Snap2LineNumber(self, ny, value):
         """ Snap2LineNumber(ny, value)
@@ -222,7 +290,7 @@ cdef class CSRectGrid:
         """
         ny = CheckNyDir(ny)
         cdef bool inside=False
-        pos = self.thisptr.Snap2LineNumber(ny, value, inside)
+        pos = self._ptr().Snap2LineNumber(ny, value, inside)
         return pos, inside>0
 
     def GetSimArea(self):
@@ -232,7 +300,7 @@ cdef class CSRectGrid:
         :returns: (2,3) array -- Simulation domain box
         """
         bb = np.zeros([2,3])
-        cdef double *_bb = self.thisptr.GetSimArea()
+        cdef double *_bb = self._ptr().GetSimArea()
         for n in range(3):
             bb[0,n] = _bb[2*n]
             bb[1,n] = _bb[2*n+1]
@@ -242,4 +310,6 @@ cdef class CSRectGrid:
         """
         Check if the mesh is valid. That is at least 2 mesh lines in all directions.
         """
-        return self.thisptr.isValid()
+        return self._ptr().isValid()
+
+RegisterWrapperFactory(GRID, CSRectGrid._from_address)

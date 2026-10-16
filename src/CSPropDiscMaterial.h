@@ -17,6 +17,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <mutex>
+
 #include "CSProperties.h"
 #include "CSPropMaterial.h"
 
@@ -59,9 +62,10 @@ public:
 	int GetFileType() const {return m_FileType;}
 
 	//! Get the affine transform applied to lookup coordinates before the scale factor.
-	/*! Returns NULL if no transform has been set.
+	/*! Lazily creates a transform if none exists yet, so the result can always be
+	 *  used directly (e.g. GetTransform()->AddTransform(...)).
 	 *  Coordinate lookup order: InvertTransform(coord) -> divide by Scale -> look up in mesh. */
-	CSTransform* GetTransform() {return m_Transform;}
+	CSTransform* GetTransform();
 
 	//! Set (and take ownership of) an affine transform applied to lookup coordinates.
 	/*! The transform is applied before the scale factor: coords are first
@@ -83,8 +87,9 @@ public:
 
 	virtual void ShowPropertyStatus(std::ostream& stream);
 
-	//! Create a vtkPolyData surface that separates the discrete material from background material
-	virtual vtkPolyData* CreatePolyDataModel() const;
+	//! Create a vtkPolyData surface that separates the discrete material from background material.
+	//! Loads the data file if not already read. Returns NULL if no valid data is available.
+	virtual vtkPolyData* CreatePolyDataModel();
 
 protected:
 	unsigned int GetWeightingPos(const double* coords);
@@ -104,7 +109,8 @@ protected:
 	float *m_Disc_Density;
 	double m_Scale;
 	bool m_DB_Background;
-	bool m_FileRead;
+	std::atomic<bool> m_FileRead;
+	std::mutex m_FileMutex;
 	CSTransform* m_Transform;
 
 	void EnsureFileLoaded();

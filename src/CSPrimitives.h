@@ -30,6 +30,7 @@
 #include "ParameterObjects.h"
 #include "ParameterCoord.h"
 #include "CSXCAD_Global.h"
+#include "CSObject.h"
 
 class CSPrimPoint;
 class CSPrimBox;
@@ -67,9 +68,12 @@ bool CSXCAD_EXPORT CoordInRange(const double* p, const double* start, const doub
  This is an abstract base class for different geometrical primitives like boxes, spheres, cylinders etc.
  !!! Tolerances not yet obeyed !!!
  */
-class CSXCAD_EXPORT CSPrimitives
+class CSXCAD_EXPORT CSPrimitives : public CSObject
 {
 public:
+	//! \sa CSObject::ObjectKind
+	ObjectKind GetObjectKind() const {return PRIMITIVE;}
+
 	virtual ~CSPrimitives();
 
 	virtual void Init();
@@ -175,7 +179,7 @@ public:
 	CoordinateSystem GetCoordInputType() const {return m_MeshType;}
 
 	//! Define the coordinate system this primitive is defined in (may be different to the input mesh type) \sa SetCoordInputType
-	void SetCoordinateSystem(CoordinateSystem cs) {m_PrimCoordSystem=cs;}
+	void SetCoordinateSystem(CoordinateSystem cs) {Invalidate(); m_PrimCoordSystem=cs;}
 	//! Read the coordinate system for this primitive (may be different to the input mesh type) \sa GetCoordInputType
 	CoordinateSystem GetCoordinateSystem() const {return m_PrimCoordSystem;}
 
